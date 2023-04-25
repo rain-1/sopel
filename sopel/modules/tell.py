@@ -172,6 +172,129 @@ def _format_safe_lstrip(text):
 
     return text[start:]
 
+import re
+import os
+import openai
+import json
+
+
+prompt = """
+The task is to translate natural language into a bot commands.
+The list of commands are .time, .roll, .pronouns, .setpronouns, .in
+
+In: what time is it?
+Out: /time
+STOP
+
+In: what's the time?
+Out: /time
+STOP
+
+In: roll a dice
+Out: /roll 1d6
+STOP
+
+In: roll a 7 sided dice
+Out: /roll 1d7
+STOP
+
+In: roll three dice that have 2 sides
+Out: /roll 3d2
+STOP
+
+In: what are neon_tiger's pronouns?
+Out: /pronouns neon_tiger
+STOP
+
+In: my pronouns are they/them
+Out: /setpronouns $ they/them
+STOP
+
+In: im using she/her pronouns
+Out: /setpronouns $ she/her
+STOP
+
+In: from now on ill use male pronouns
+Out: /setpronouns $ he/him
+STOP
+
+In: Can you remind me to go to class in 3 hours and 24 mins please?
+Out: /in 3h45m Go to class
+STOP
+
+In: I need a reminder in half an hour
+Out: /in 30m here's your reminder
+STOP
+
+In: My food will be cooked in 15 mins
+Out: /in 15m food cooked
+STOP
+
+In: """
+
+
+def persist_to_file(file_name):
+    def decorator(original_func):
+        try:
+            cache = json.load(open(file_name, 'r'))
+        except (IOError, ValueError):
+            cache = {}
+
+        def new_func(param):
+            # turn param into a string
+            key = json.dumps(param)
+            if key not in cache:
+                cache[key] = original_func(param)
+                json.dump(cache, open(file_name, 'w'))
+            return cache[key]
+        return new_func
+    return decorator
+
+openai.api_key = os.getenv("OPENAI_API_KEY")
+
+@persist_to_file('text-ada-001-query-cache.json')
+def send_off_query(promp):
+    response = openai.Completion.create(
+        model="text-ada-001",
+        prompt=promp,
+        temperature=0,
+        max_tokens=1024,
+        top_p=1.0,
+        frequency_penalty=0.0,
+        presence_penalty=0.0,
+        stop=["STOP"]
+    )
+    return response
+
+def process_response(output):
+    try:
+        if output['choices'][0]['finish_reason'] == 'stop':
+            text = output['choices'][0]['text']
+            return text
+    except (KeyError, IndexError):
+        return None
+
+openai.api_key = os.getenv("OPENAI_API_KEY")
+
+@plugin.command('natural')
+@plugin.rule(r'$nick (.*)')
+def f_natural(bot, trigger):
+    #trigger.group(1)
+    result = send_off_query(prompt + trigger.group(1) + "\nOut:")
+    print(result)
+    response = process_response(result).lstrip()
+    print(response)
+    if response:
+        #response = "/in 33h21m Go to class\nSTOP\n\nIn: I "
+        res = re.search(r'/([^\s]+)(.*)', response)
+        if res:
+            cmd = ".{}{}".format(res.group(1), res.group(2))
+            bot.reply('internally converting this to: [{}]'.format(cmd))
+            bot.on_message(":{}!test@example.com PRIVMSG #secret :{}".format(trigger.nick, cmd))
+        else:
+            print("regex match failed")
+    else:
+        bot.reply("didnt understand or didnt get a good LLM response")
 
 @plugin.command('tell', 'ask')
 @plugin.nickname_command('tell', 'ask')
